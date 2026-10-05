@@ -20,19 +20,27 @@
 </head>
 <body>
 <form id="f">
-  <input id="u" placeholder="https://example.com" autofocus>
-  <button>開く</button>
+  <input id="u" placeholder="検索 または URL を入力" autofocus>
+  <button>検索 / 開く</button>
 </form>
 <script>
   // GitHub Pages に置く場合は Vercel の URL を指定 (例: "https://my-proxy.vercel.app")
   // Vercel 上で使う場合は空文字のままでOK
   const API_BASE = "";
+  // 検索エンジン (%s が検索語に置き換わります)
+  const SEARCH_URL = "https://search.brave.com/search?q=%s&source=web";
+
+  function toTarget(v) {
+    if (/^https?:\/\//i.test(v)) return v;                                   // URL
+    if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?([\/?#]\S*)?$/i.test(v)) return "https://" + v; // example.com 形式
+    return SEARCH_URL.replace("%s", encodeURIComponent(v));                     // それ以外は検索
+  }
+
   document.getElementById("f").addEventListener("submit", e => {
     e.preventDefault();
-    let v = document.getElementById("u").value.trim();
+    const v = document.getElementById("u").value.trim();
     if (!v) return;
-    if (!/^https?:\/\//i.test(v)) v = "https://" + v;
-    location.href = API_BASE + "/api/proxy?url=" + encodeURIComponent(v);
+    location.href = API_BASE + "/api/proxy?url=" + encodeURIComponent(toTarget(v));
   });
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});

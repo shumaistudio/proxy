@@ -250,6 +250,10 @@ async function handleProxy(request) {
     out.set("Access-Control-Allow-Origin", "*");
 
     if (/text\/html/i.test(type)) {
+      const dest = request.headers.get("sec-fetch-dest");
+      if (!dest || dest === "document") {
+        out.append("Set-Cookie", `__pxlast=${encodeURIComponent(target.origin)}; Path=/; SameSite=Lax; Secure; Max-Age=86400`);
+      }
       return rewriteHtml(new Response(upstream.body, { status: upstream.status, headers: out }), target.href);
     }
     if (/text\/css/i.test(type)) {
@@ -271,11 +275,37 @@ async function handleProxy(request) {
   }
 }
 
+/* ---------- 相対パスの漏れ対策: 直前のサイトを推測してプロキシへ転送 ---------- */
+function guessOrigin(request) {
+  const ref = request.headers.get("referer");
+  if (ref) {
+    try {
+      const r = new URL(ref);
+      if (r.pathname === "/api/proxy") {
+        const t = r.searchParams.get("url") || r.searchParams.get("__purl");
+        if (t) return new URL(t).origin;
+      }
+    } catch {}
+  }
+  const m = (request.headers.get("cookie") || "").match(/(?:^|;\s*)__pxlast=([^;]+)/);
+  if (m) {
+    try { return decodeURIComponent(m[1]); } catch {}
+  }
+  return null;
+}
+
 /* ---------- Workers エントリポイント ---------- */
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/proxy") return handleProxy(request);
-    return env.ASSETS.fetch(request); // public/ の静的ファイル
+
+    const res = await env.ASSETS.fetch(request); // public/ の静的ファイル
+    if (res.status !== 404) return res;
+
+    const origin = guessOrigin(request);
+    if (!origin) return res;
+    const dest = url.origin + PROXY + encodeURIComponent(origin + url.pathname + url.search);
+    return Response.redirect(dest, request.method === "GET" || request.method === "HEAD" ? 302 : 307);
   },
 };
