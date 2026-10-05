@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Proxy - 動画</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#111111">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#eee}
+  header{display:flex;gap:8px;align-items:center;padding:10px;position:sticky;top:0;background:#111;z-index:2;border-bottom:1px solid #222}
+  header a{color:#9ab8ff;text-decoration:none;font-size:14px;white-space:nowrap}
+  form{display:flex;gap:8px;flex:1}
+  input[type=text]{flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
+  button{padding:10px 16px;border:0;border-radius:8px;background:#4f8cff;color:#fff;cursor:pointer}
+  #player{display:none;max-width:960px;margin:12px auto;padding:0 10px}
+  #player video{width:100%;max-height:75vh;background:#000;border-radius:10px;display:block}
+  #player iframe{width:100%;aspect-ratio:16/9;border:0;border-radius:10px;display:none}
+  #pt{font-size:13px;color:#e99;margin-top:6px;min-height:1em} #pt a{color:#9ab8ff}
+  #player label{display:block;margin-top:8px;font-size:13px;color:#aaa}
+  #msg{padding:16px;color:#ccc;max-width:960px;margin:auto;line-height:1.6}
+  #list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:10px;max-width:1100px;margin:auto}
+  .card{cursor:pointer}
+  .card img{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#222}
+  .card b{display:block;font-size:14px;margin-top:6px;line-height:1.35}
+  .card span{font-size:12px;color:#999}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← 通常モード</a>
+  <form id="f"><input id="u" type="text" placeholder="動画を検索 / ドメイン / YouTubeのURL" autofocus><button>検索</button></form>
+</header>
+<div id="player"><video id="vd" controls playsinline></video>
+  <iframe id="fr" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+  <div id="pt"></div>
+  <label><input type="checkbox" id="emb"> 公式の埋め込みプレーヤーで再生(YouTubeに直接つながれる環境向け)</label></div>
+<div id="msg"></div>
+<div id="list"></div>
+<script>
+const $ = id => document.getElementById(id);
+const PX = u => "/api/proxy?url=" + encodeURIComponent(u);
+const dec = s => { const t = document.createElement("textarea"); t.innerHTML = s; return t.value; };
+let curId = null;
+
+function ytId(v){
+  try{
+    const x = new URL(/^https?:\/\//i.test(v) ? v : "https://" + v);
+    const h = x.hostname.replace(/^(www|m)\./, "");
+    let id = null;
+    if (h === "youtu.be") id = x.pathname.slice(1).split("/")[0];
+    else if (h === "youtube.com" || h === "youtube-nocookie.com"){
+      if (x.pathname === "/watch") id = x.searchParams.get("v");
+      else { const m = x.pathname.match(/^\/(shorts|embed|live)\/([\w-]{11})/); if (m) id = m[2]; }
+    }
+    return /^[\w-]{11}$/.test(id || "") ? id : null;
+  }catch{ return null; }
+}
+
+function play(id){
+  curId = id; $("pt").textContent = "";
+  const emb = $("emb").checked;
+  $("vd").style.display = emb ? "none" : "block";
+  $("fr").style.display = emb ? "block" : "none";
+  if (emb) { $("vd").pause(); $("fr").src = "https://www.youtube-nocookie.com/embed/" + id + "?autoplay=1&rel=0"; }
+  else { $("fr").src = "about:blank"; $("vd").src = "/api/yt/stream?id=" + id; $("vd").play().catch(() => {}); }
+  $("player").style.display = "block";
+  scrollTo({top:0, behavior:"smooth"});
+}
+$("emb").addEventListener("change", () => curId && play(curId));
+$("vd").addEventListener("error", () => {
+  $("pt").innerHTML = "再生に失敗しました。 <a target='_blank' href='/api/yt/debug?id=" + curId + "'>診断結果を開く</a>";
+});
+
+async function search(q){
+  $("list").innerHTML = ""; $("msg").textContent = "検索中…";
+  try{
+    const r = await fetch("/api/yt/search?q=" + encodeURIComponent(q));
+    const d = await r.json();
+    if (d.error) { $("msg").textContent = "エラー: " + (d.message || d.error); return; }
+    if (!d.items.length) { $("msg").textContent = "見つかりませんでした。"; return; }
+    $("msg").textContent = "";
+    for (const it of d.items){
+      const c = document.createElement("div"); c.className = "card";
+      const img = document.createElement("img"); img.loading = "lazy";
+      img.src = PX("https://i.ytimg.com/vi/" + it.id + "/mqdefault.jpg");
+      const b = document.createElement("b"); b.textContent = dec(it.title);
+      const s = document.createElement("span"); s.textContent = [dec(it.channel), it.length, it.views, it.date].filter(Boolean).join(" · ");
+      c.append(img, b, s);
+      c.onclick = () => { play(it.id); history.replaceState(null, "", "?q=" + encodeURIComponent(q) + "&v=" + it.id); };
+      $("list").append(c);
+    }
+  }catch(e){ $("msg").textContent = "通信エラー: " + e.message; }
+}
+
+function go(v){
+  const id = ytId(v);
+  if (id) { play(id); history.replaceState(null, "", "?v=" + id); return; }           // YouTubeの動画URL → 直接再生
+  if (/^https?:\/\//i.test(v)) { location.href = PX(v); return; }                     // URL
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?([\/?#]\S*)?$/i.test(v)) { location.href = PX("https://" + v); return; } // ドメイン
+  history.replaceState(null, "", "?q=" + encodeURIComponent(v));
+  search(v);                                                                           // それ以外 → YouTube検索
+}
+
+$("f").addEventListener("submit", e => { e.preventDefault(); const v = $("u").value.trim(); if (v) go(v); });
+
+const p = new URLSearchParams(location.search);
+if (p.get("q")) { $("u").value = p.get("q"); search(p.get("q")); }
+if (/^[\w-]{11}$/.test(p.get("v") || "")) play(p.get("v"));
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+</script>
+</body>
+</html>

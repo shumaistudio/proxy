@@ -1,3 +1,5 @@
+import { handleYtSearch, handleYtStream, handleYtDebug } from "./yt.js";
+
 const PROXY = "/api/proxy?url=";
 const SKIP = /^(data:|blob:|javascript:|mailto:|tel:|about:|#)/i;
 
@@ -299,6 +301,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/proxy") return handleProxy(request);
+    if (url.pathname === "/api/yt/search") return handleYtSearch(request);
+    if (url.pathname === "/api/yt/stream") return handleYtStream(request);
+    if (url.pathname === "/api/yt/debug") return handleYtDebug(request);
 
     const res = await env.ASSETS.fetch(request); // public/ の静的ファイル
     if (res.status !== 404) return res;
