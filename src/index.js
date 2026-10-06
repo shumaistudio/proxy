@@ -296,14 +296,70 @@ function guessOrigin(request) {
   return null;
 }
 
+/* ---------- 診断: /api/probe?url=動画ページURL (プロキシが動画を取得する流れを再現して結果を表示) ---------- */
+async function handleProbe(request) {
+  const j = (o, st = 200) => new Response(JSON.stringify(o, null, 1), { status: st, headers: { "content-type": "application/json; charset=utf-8" } });
+  let page;
+  try { page = new URL(new URL(request.url).searchParams.get("url")); } catch { return j({ error: "url required" }, 400); }
+  if (!/^https?:$/.test(page.protocol) || blockedHost(page.hostname)) return j({ error: "blocked" }, 403);
+  const ua = request.headers.get("user-agent") || "Mozilla/5.0";
+  const hops = [];
+  const res = await fetch(page.href, { headers: { "user-agent": ua, accept: "text/html,*/*", referer: page.origin + "/" } });
+  hops.push({ step: "page", status: res.status, type: res.headers.get("content-type") });
+  const cookie = (res.headers.getSetCookie ? res.headers.getSetCookie() : []).map(c => c.split(";")[0]).join("; ");
+  const html = await res.text();
+  const m = html.match(/<source[^>]+src=["']([^"']+)["']/i) || html.match(/<video[^>]+src=["']([^"']+)["']/i);
+  if (!m) return j({ hops, error: "ページ内に動画の取得先が見つかりません", head: html.slice(0, 300) });
+  let next = new URL(m[1].replace(/&amp;/g, "&"), page.href).href;
+  for (let i = 0; i < 6; i++) {
+    if (blockedHost(new URL(next).hostname)) { hops.push({ url: next, error: "blocked host" }); break; }
+    const r = await fetch(next, {
+      redirect: "manual",
+      headers: { "user-agent": ua, accept: "*/*", referer: page.origin + "/", range: "bytes=0-1", ...(cookie ? { cookie } : {}) },
+    });
+    const loc = r.headers.get("location");
+    hops.push({
+      url: next.slice(0, 160), status: r.status, type: r.headers.get("content-type"),
+      length: r.headers.get("content-length"), contentRange: r.headers.get("content-range"),
+      acceptRanges: r.headers.get("accept-ranges"), location: loc ? loc.slice(0, 160) : undefined,
+    });
+    if (r.status >= 300 && r.status < 400 && loc) { next = new URL(loc, next).href; continue; }
+    if (r.status >= 400 || /text\//.test(r.headers.get("content-type") || "")) hops[hops.length - 1].body = (await r.text()).slice(0, 200);
+    break;
+  }
+  return j({ hops });
+}
+
+/* ---------- 自宅サーバー(yt-home)経由で動画を取得 ---------- */
+async function viaHome(request, env, strict) {
+  const site = request.headers.get("sec-fetch-site");
+  if (strict && site && site !== "same-origin" && site !== "none") return new Response("forbidden", { status: 403 });
+  const u = new URL(request.url);
+  const h = new Headers();
+  const range = request.headers.get("range");
+  if (range) h.set("range", range);
+  if (env.YT_SECRET) h.set("x-yt-secret", env.YT_SECRET);
+  try {
+    const r = await fetch(env.YT_HOME.replace(/\/$/, "") + u.pathname + u.search, { headers: h });
+    const out = new Headers();
+    for (const k of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+      const v = r.headers.get(k); if (v) out.set(k, v);
+    }
+    return new Response(r.body, { status: r.status, headers: out });
+  } catch (e) {
+    return new Response("home server error: " + e.message, { status: 502 });
+  }
+}
+
 /* ---------- Workers エントリポイント ---------- */
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/proxy") return handleProxy(request);
+    if (url.pathname === "/api/probe") return handleProbe(request);
     if (url.pathname === "/api/yt/search") return handleYtSearch(request);
-    if (url.pathname === "/api/yt/stream") return handleYtStream(request);
-    if (url.pathname === "/api/yt/debug") return handleYtDebug(request);
+    if (url.pathname === "/api/yt/stream") return env.YT_HOME ? viaHome(request, env, true) : handleYtStream(request);
+    if (url.pathname === "/api/yt/debug") return env.YT_HOME ? viaHome(request, env, false) : handleYtDebug(request);
 
     const res = await env.ASSETS.fetch(request); // public/ の静的ファイル
     if (res.status !== 404) return res;
