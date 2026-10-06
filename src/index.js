@@ -351,10 +351,40 @@ async function viaHome(request, env, strict) {
   }
 }
 
+/* ---------- Basic認証 ---------- */
+// Cloudflareの Secret に BASIC_USER / BASIC_PASS を設定するとそちらが優先されます。
+const DEFAULT_USER = "shumai";
+const DEFAULT_PASS = "221224";
+const PUBLIC_PATHS = p => p === "/manifest.json" || p === "/sw.js" || p === "/favicon.png" || p.startsWith("/icons/"); // PWAのインストールに必要
+
+function safeEq(a, b) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+function authorized(request, env) {
+  const h = request.headers.get("authorization") || "";
+  if (!h.startsWith("Basic ")) return false;
+  let dec;
+  try { dec = atob(h.slice(6).trim()); } catch { return false; }
+  const i = dec.indexOf(":");
+  if (i < 0) return false;
+  const okUser = safeEq(dec.slice(0, i), env.BASIC_USER || DEFAULT_USER);
+  const okPass = safeEq(dec.slice(i + 1), env.BASIC_PASS || DEFAULT_PASS);
+  return okUser && okPass;
+}
+
 /* ---------- Workers エントリポイント ---------- */
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (!PUBLIC_PATHS(url.pathname) && !authorized(request, env)) {
+      return new Response("Authentication required", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Basic realm="proxy", charset="UTF-8"' },
+      });
+    }
     if (url.pathname === "/api/proxy") return handleProxy(request);
     if (url.pathname === "/api/probe") return handleProbe(request);
     if (url.pathname === "/api/yt/search") return handleYtSearch(request);
