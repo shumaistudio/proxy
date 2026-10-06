@@ -37,7 +37,7 @@
 <div id="player"><video id="vd" controls playsinline></video>
   <iframe id="fr" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
   <div id="pt"></div>
-  <label><input type="checkbox" id="emb"> 公式の埋め込みプレーヤーで再生(YouTubeに直接つながれる環境向け)</label></div>
+  <label><input type="checkbox" id="emb"> Worker経由の再生を試す(通常は失敗します。失敗時は自動で公式プレーヤーに戻ります)</label></div>
 <div id="msg"></div>
 <div id="list"></div>
 <script>
@@ -62,17 +62,21 @@ function ytId(v){
 
 function play(id){
   curId = id; $("pt").textContent = "";
-  const emb = $("emb").checked;
+  const emb = !$("emb").checked; // 既定は公式の埋め込みプレーヤー
   $("vd").style.display = emb ? "none" : "block";
   $("fr").style.display = emb ? "block" : "none";
-  if (emb) { $("vd").pause(); $("fr").src = "https://www.youtube-nocookie.com/embed/" + id + "?autoplay=1&rel=0"; }
+  if (emb) { $("vd").pause(); $("vd").removeAttribute("src"); $("fr").src = "https://www.youtube-nocookie.com/embed/" + id + "?autoplay=1&rel=0"; }
   else { $("fr").src = "about:blank"; $("vd").src = "/api/yt/stream?id=" + id; $("vd").play().catch(() => {}); }
   $("player").style.display = "block";
   scrollTo({top:0, behavior:"smooth"});
 }
 $("emb").addEventListener("change", () => curId && play(curId));
 $("vd").addEventListener("error", () => {
-  $("pt").innerHTML = "再生に失敗しました。 <a target='_blank' href='/api/yt/debug?id=" + curId + "'>診断結果を開く</a>";
+  if (!$("emb").checked || !curId) return;
+  const id = curId;
+  $("emb").checked = false;      // 失敗 → 公式プレーヤーへ自動で切り替え
+  play(id);
+  $("pt").innerHTML = "Worker経由の再生に失敗したため、公式プレーヤーに切り替えました。 <a target='_blank' href='/api/yt/debug?id=" + id + "'>診断結果</a>";
 });
 
 async function search(q){
